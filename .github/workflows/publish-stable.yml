@@ -1,0 +1,59 @@
+name: Publish stable update channel
+
+# Публикует updates/stable.json ПОСЛЕ того, как пользователь сам опубликовал
+# релиз. Черновики и предрелизы пропускаются условием job'а и повторной
+# проверкой в скрипте. Токены не используются: verification выполняется по
+# закреплённому сертификату подписи приложения.
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: stable-channel-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.event.release.draft == false && github.event.release.prerelease == false
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout default branch
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+
+      - name: Install APK verification tools
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends apksigner aapt
+          command -v aapt
+          command -v apksigner
+
+      - name: Verify release APK and update stable.json
+        run: |
+          set -euo pipefail
+          python3 channel/publish_stable.py \
+            --event "$GITHUB_EVENT_PATH" \
+            --owner "${{ github.repository_owner }}" \
+            --repo "${{ github.event.repository.name }}" \
+            --output .
+
+      - name: Commit channel update (no force push)
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add updates/stable.json
+          if git diff --cached --quiet; then
+            echo "stable.json уже актуален — без коммита"
+            exit 0
+          fi
+          git commit -m "chore(channel): stable ${{ github.event.release.tag_name }}"
+          # Отказ при non-fast-forward не обходит защиту ветки: force-push запрещён.
+          git push origin HEAD:${{ github.event.repository.default_branch }}
