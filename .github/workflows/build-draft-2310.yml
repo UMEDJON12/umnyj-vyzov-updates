@@ -49,7 +49,12 @@ jobs:
           sdkmanager --install 'platforms;android-35' 'build-tools;35.0.0'
           mkdir -p tools
           cp "$ANDROID_HOME/platforms/android-35/android.jar" tools/android-35.jar
-          cp "$ANDROID_HOME/build-tools/35.0.0/lib/d8.jar" tools/r8.jar
+          # Pin the exact D8/R8 toolchain used for the signed candidate.
+          curl --fail --location --retry 3 --silent --show-error \
+            'https://storage.googleapis.com/r8-releases/raw/8.3.37/r8.jar' \
+            --output tools/r8.jar
+          echo '59753e70a74f918389cc87f1b7d66b5c0862932559167425708ded159e3de439  tools/r8.jar' | sha256sum --check
+          java -cp tools/r8.jar com.android.tools.r8.R8 --version
           test -s tools/android-35.jar
           test -s tools/r8.jar
           echo "$ANDROID_HOME/build-tools/35.0.0" >> "$GITHUB_PATH"
