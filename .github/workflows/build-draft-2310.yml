@@ -105,13 +105,21 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if gh release view v2.3.10 >/dev/null 2>&1; then
-            echo 'Release v2.3.10 already exists. Refusing to replace it.' >&2
-            exit 1
+          # GitHub's /releases/tags/<tag> may return 404 for drafts.
+          # Resolve drafts through the authenticated release collection instead.
+          existing="$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+            --jq '.[] | select(.tag_name == "v2.3.10") | .id' | head -n 1)"
+          if [ -z "$existing" ]; then
+            gh release create v2.3.10 ci/SmartCall-2.3.10-signed.apk \
+              --draft --title 'Умный Вызов 2.3.10' \
+              --notes-file ci/RELEASE_NOTES_2310.md \
+              --target "$GITHUB_SHA"
+            existing="$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+              --jq '.[] | select(.tag_name == "v2.3.10") | .id' | head -n 1)"
           fi
-          gh release create v2.3.10 ci/SmartCall-2.3.10-signed.apk \
-            --draft --title 'Умный Вызов 2.3.10' \
-            --notes-file ci/RELEASE_NOTES_2310.md \
-            --target "$GITHUB_SHA"
-          gh api "repos/$GITHUB_REPOSITORY/releases/tags/v2.3.10" \
+          test -n "$existing"
+          result="$(gh api "repos/$GITHUB_REPOSITORY/releases/$existing" --jq \
+            '(.draft == true) and (.prerelease == false) and (.published_at == null) and (.tag_name == "v2.3.10") and (.assets | length == 1) and (.assets[0].name == "SmartCall-2.3.10-signed.apk") and (.assets[0].digest == "sha256:d0367e4467f3b3b7679106c71e906b4a764812ed637bd49a353c45e635f5efd9")')"
+          test "$result" = "true"
+          gh api "repos/$GITHUB_REPOSITORY/releases/$existing" \
             --jq '{id: .id, draft: .draft, published_at: .published_at, assets: [.assets[].name]}'
