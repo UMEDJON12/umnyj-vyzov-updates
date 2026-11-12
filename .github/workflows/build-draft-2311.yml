@@ -119,7 +119,7 @@ jobs:
           fi
           test -n "$existing"
           result="$(gh api "repos/$GITHUB_REPOSITORY/releases/$existing" --jq \
-            '(.draft == true) and (.prerelease == false) and (.published_at == null) and (.tag_name == "v2.3.11") and (.assets | length == 1) and (.assets[0].name == "SmartCall-2.3.11-signed.apk") and (.assets[0].digest == "sha256:967e70d404e56b25fe2287ae754e1e6f1288b3ff0ac012ebea5eb41aeaf2c191")')"
+            '(.draft == true) and (.prerelease == false) and (.published_at == null) and (.tag_name == "v2.3.11") and (.assets | length == 1) and (.assets[0].name == "SmartCall-2.3.11-signed.apk") and (.assets[0].digest == "sha256:8dba8cbe9cb84accf3f3e341a1d2c42148c0287d69fbc5d30c4690e036216182")')"
           test "$result" = "true"
           gh api "repos/$GITHUB_REPOSITORY/releases/$existing" \
             --jq '{id: .id, draft: .draft, published_at: .published_at, assets: [.assets[].name]}'
