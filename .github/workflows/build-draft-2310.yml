@@ -34,13 +34,18 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Android SDK command line tools
-        uses: android-actions/setup-android@v3
-
       - name: Install SDK 35, D8 and release verification tools
         shell: bash
         run: |
           set -euo pipefail
+          # GitHub ubuntu-24.04 runners already have the SDK command-line tools.
+          # setup-android@v3 incorrectly tries to install retired package 'tools'.
+          export ANDROID_HOME="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          if ! command -v sdkmanager >/dev/null 2>&1; then
+            SDKMANAGER="$(find "$ANDROID_HOME/cmdline-tools" -path '*/bin/sdkmanager' -type f | sort -V | tail -n 1)"
+            test -n "$SDKMANAGER"
+            export PATH="$(dirname "$SDKMANAGER"):$PATH"
+          fi
           sdkmanager --install 'platforms;android-35' 'build-tools;35.0.0'
           mkdir -p tools
           cp "$ANDROID_HOME/platforms/android-35/android.jar" tools/android-35.jar
@@ -62,6 +67,16 @@ jobs:
         run: |
           set -euo pipefail
           python3 ci/verify_release_2310.py
+          python3 - <<'PY'
+          from zipfile import ZipFile
+          with ZipFile('dist/SmartCall-2.3.10-CI-unsigned.apk') as a, ZipFile('ci/SmartCall-2.3.10-signed.apk') as b:
+              original=set(a.namelist())
+              payload={x for x in b.namelist() if not x.startswith('META-INF/')}
+              assert original == payload, 'compiled payload names differ from signed release'
+              for name in sorted(original):
+                  assert a.read(name)==b.read(name), 'compiled output mismatch: '+name
+          print('Signed APK matches GitHub-compiled DEX and resources')
+          PY
           cp ci/SmartCall-2.3.10-signed.apk dist/SmartCall-2.3.10-signed.apk
           apksigner verify --verbose --print-certs --min-sdk-version 23 ci/SmartCall-2.3.10-signed.apk > /tmp/signcheck.txt
           grep -q 'Verified using v1 scheme .*: true' /tmp/signcheck.txt
