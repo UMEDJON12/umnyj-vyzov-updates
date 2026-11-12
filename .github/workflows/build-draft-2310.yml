@@ -28,11 +28,11 @@ jobs:
           test -s build_apk.py
           test -s src/com/smartcall/ru/CallController.java
 
-      - name: Java 17
+      - name: Java 21 (same compiler major version as signed build)
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: '21'
 
       - name: Install SDK 35, D8 and release verification tools
         shell: bash
