@@ -1,0 +1,125 @@
+name: Build and prepare SmartCall 2.3.12 draft
+
+on:
+  push:
+    branches:
+      - release-candidate/2.3.12
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: draft-smartcall-2312
+  cancel-in-progress: false
+
+jobs:
+  verify-build-and-draft:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout release candidate source
+        uses: actions/checkout@v4
+
+      - name: Extract reviewed, unencrypted source archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          unzip -q -o sources/Umnyj_Vyzov_v2.3.12_Public_Source.zip -d .
+          test -s build_apk.py
+          test -s src/com/smartcall/ru/CallController.java
+
+      - name: Java 21 (same compiler major version as signed build)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Install SDK 35, D8 and release verification tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          # GitHub ubuntu-24.04 runners already have the SDK command-line tools.
+          # setup-android@v3 incorrectly tries to install retired package 'tools'.
+          export ANDROID_HOME="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          if ! command -v sdkmanager >/dev/null 2>&1; then
+            SDKMANAGER="$(find "$ANDROID_HOME/cmdline-tools" -path '*/bin/sdkmanager' -type f | sort -V | tail -n 1)"
+            test -n "$SDKMANAGER"
+            export PATH="$(dirname "$SDKMANAGER"):$PATH"
+          fi
+          sdkmanager --install 'platforms;android-35' 'build-tools;35.0.0'
+          mkdir -p tools
+          cp "$ANDROID_HOME/platforms/android-35/android.jar" tools/android-35.jar
+          # Pin the exact D8/R8 toolchain used for the signed candidate.
+          curl --fail --location --retry 3 --silent --show-error \
+            'https://storage.googleapis.com/r8-releases/raw/8.3.37/r8lib.jar' \
+            --output tools/r8.jar
+          echo '59753e70a74f918389cc87f1b7d66b5c0862932559167425708ded159e3de439  tools/r8.jar' | sha256sum --check
+          java -cp tools/r8.jar com.android.tools.r8.R8 --version
+          test -s tools/android-35.jar
+          test -s tools/r8.jar
+          echo "$ANDROID_HOME/build-tools/35.0.0" >> "$GITHUB_PATH"
+          python3 -m venv "$RUNNER_TEMP/smartcall-venv"
+          "$RUNNER_TEMP/smartcall-venv/bin/pip" install --disable-pip-version-check -r requirements.txt
+          echo "$RUNNER_TEMP/smartcall-venv/bin" >> "$GITHUB_PATH"
+
+      - name: Compile unsigned APK from plain Java source
+        run: |
+          set -euo pipefail
+          python3 build_apk.py --unsigned --output dist/SmartCall-2.3.12-CI-unsigned.apk
+          test -s dist/SmartCall-2.3.12-CI-unsigned.apk
+
+      - name: Verify signed owner candidate
+        run: |
+          set -euo pipefail
+          python3 ci/verify_release_2312.py
+          python3 - <<'PY'
+          from zipfile import ZipFile
+          with ZipFile('dist/SmartCall-2.3.12-CI-unsigned.apk') as a, ZipFile('ci/SmartCall-2.3.12-signed.apk') as b:
+              original=set(a.namelist())
+              payload={x for x in b.namelist() if not x.startswith('META-INF/')}
+              assert original == payload, 'compiled payload names differ from signed release'
+              for name in sorted(original):
+                  assert a.read(name)==b.read(name), 'compiled output mismatch: '+name
+          print('Signed APK matches GitHub-compiled DEX and resources')
+          PY
+          cp ci/SmartCall-2.3.12-signed.apk dist/SmartCall-2.3.12-signed.apk
+          apksigner verify --verbose --print-certs --min-sdk-version 23 ci/SmartCall-2.3.12-signed.apk > /tmp/signcheck.txt
+          grep -q 'Verified using v1 scheme .*: true' /tmp/signcheck.txt
+          grep -q 'Verified using v2 scheme .*: true' /tmp/signcheck.txt
+          grep -q 'Number of signers: 1' /tmp/signcheck.txt
+          grep -q 'Signer #1 certificate SHA-256 digest: baedb1a77af5b2a9a0f34de72e7f88526e0e82c508eb07fee8b04ce2cf023c01' /tmp/signcheck.txt
+
+      - name: Run project tests
+        run: sh tests/run_all.sh
+
+      - name: Archive CI unsigned build for inspection
+        uses: actions/upload-artifact@v4
+        with:
+          name: SmartCall-2.3.12-CI-unsigned
+          path: dist/SmartCall-2.3.12-CI-unsigned.apk
+          retention-days: 14
+
+      - name: Create a GitHub draft (never publish automatically)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # GitHub's /releases/tags/<tag> may return 404 for drafts.
+          # Resolve drafts through the authenticated release collection instead.
+          existing="$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+            --jq '.[] | select(.tag_name == "v2.3.12") | .id' | head -n 1)"
+          if [ -z "$existing" ]; then
+            gh release create v2.3.12 ci/SmartCall-2.3.12-signed.apk \
+              --draft --title 'Умный Вызов 2.3.12' \
+              --notes-file ci/RELEASE_NOTES_2312.md \
+              --target "$GITHUB_SHA"
+            existing="$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+              --jq '.[] | select(.tag_name == "v2.3.12") | .id' | head -n 1)"
+          fi
+          test -n "$existing"
+          result="$(gh api "repos/$GITHUB_REPOSITORY/releases/$existing" --jq \
+            '(.draft == true) and (.prerelease == false) and (.published_at == null) and (.tag_name == "v2.3.12") and (.assets | length == 1) and (.assets[0].name == "SmartCall-2.3.12-signed.apk") and (.assets[0].digest == "sha256:05ae4d798809de13a19e807fd0beb2eaa7bc8e1f8443b400a180688251348f87")')"
+          test "$result" = "true"
+          gh api "repos/$GITHUB_REPOSITORY/releases/$existing" \
+            --jq '{id: .id, draft: .draft, published_at: .published_at, assets: [.assets[].name]}'
